@@ -1,5 +1,6 @@
 package hipaa.review_test
 
+import rego.v1
 import data.hipaa.review
 
 wildcard_policy := json.marshal({

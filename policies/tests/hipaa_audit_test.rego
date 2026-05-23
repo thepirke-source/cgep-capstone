@@ -1,5 +1,6 @@
 package hipaa.audit_test
 
+import rego.v1
 import data.hipaa.audit
 
 # Pass: multi-region trail w/ log-file-validation

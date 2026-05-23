@@ -1,5 +1,6 @@
 package hipaa.encryption_test
 
+import rego.v1
 import data.hipaa.encryption
 
 # Pass: KMS encryption

@@ -1,5 +1,6 @@
 package hipaa.access_test
 
+import rego.v1
 import data.hipaa.access
 
 # Pass: bucket + PAB with all four flags true

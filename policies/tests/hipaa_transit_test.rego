@@ -1,5 +1,6 @@
 package hipaa.transit_test
 
+import rego.v1
 import data.hipaa.transit
 
 tls_deny_policy := json.marshal({
