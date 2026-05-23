@@ -55,5 +55,5 @@ variable "evidence_vault_lock_mode" {
 variable "github_repo" {
   type        = string
   description = "owner/repo for GitHub OIDC trust."
-  default     = "thepirke-source/cgep-portfolio"
+  default     = "thepirke-source/cgep-capstone"
 }
