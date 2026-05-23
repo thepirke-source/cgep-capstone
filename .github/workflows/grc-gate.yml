@@ -1,0 +1,147 @@
+name: GRC Gate
+# Acme Health capstone — HIPAA Security Rule enforced as code.
+# Five named steps: plan → policy → apply → sign → upload. Fail-closed.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - "policies/**"
+      - ".github/workflows/grc-gate.yml"
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - "policies/**"
+      - ".github/workflows/grc-gate.yml"
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+env:
+  TF_VERSION: "1.6.6"
+  OPA_VERSION: "0.60.0"
+  CONFTEST_VERSION: "0.50.0"
+  COSIGN_VERSION: "v2.4.0"
+  AWS_REGION: "us-east-1"
+  EVIDENCE_BUCKET: "acme-evidence-vault-0f147130"
+
+jobs:
+  grc-gate:
+    name: HIPAA gate
+    runs-on: ubuntu-latest
+    outputs:
+      plan_sha: ${{ steps.plan.outputs.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Setup OPA
+        run: |
+          curl -sSL -o /usr/local/bin/opa https://openpolicyagent.org/downloads/v${{ env.OPA_VERSION }}/opa_linux_amd64_static
+          chmod +x /usr/local/bin/opa
+          opa version
+
+      - name: Setup Conftest
+        run: |
+          curl -sSL https://github.com/open-policy-agent/conftest/releases/download/v${{ env.CONFTEST_VERSION }}/conftest_${{ env.CONFTEST_VERSION }}_Linux_x86_64.tar.gz | tar -xz -C /tmp
+          sudo mv /tmp/conftest /usr/local/bin/
+          conftest --version
+
+      - name: Setup Cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+
+      # 1. PLAN
+      - name: 1. terraform plan
+        id: plan
+        working-directory: terraform
+        run: |
+          terraform init
+          terraform validate
+          terraform plan -out=tfplan
+          terraform show -json tfplan > plan.json
+          echo "sha=$(sha256sum plan.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      # 2. POLICY
+      - name: 2a. OPA unit tests
+        run: opa test -v policies/
+
+      - name: 2b. Conftest gate on plan
+        working-directory: terraform
+        run: conftest test plan.json --policy ../policies/ --all-namespaces
+
+      # 3. APPLY (push to main only, after policy passed)
+      - name: 3. terraform apply
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: terraform
+        run: terraform apply -auto-approve tfplan
+
+      # 4. SIGN
+      - name: 4a. Assemble evidence bundle
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: terraform
+        run: |
+          mkdir -p ../evidence
+          cp plan.json ../evidence/plan.json
+          terraform show -json > ../evidence/state.json
+          terraform output -json > ../evidence/outputs.json
+          cd ..
+          jq -n --arg sha "${{ steps.plan.outputs.sha }}" \
+                --arg commit "${{ github.sha }}" \
+                --arg run "${{ github.run_id }}" \
+                '{framework:"HIPAA Security Rule", plan_sha:$sha, commit:$commit, run_id:$run}' \
+                > evidence/manifest.json
+          tar czf evidence.tar.gz evidence/
+
+      - name: 4b. Cosign sign-blob (keyless)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign-blob --yes evidence.tar.gz \
+            --output-signature evidence.tar.gz.sig \
+            --output-certificate evidence.tar.gz.pem
+
+      # 5. UPLOAD
+      - name: 5. Upload signed bundle
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          PREFIX="$(date -u +%Y/%m/%d)/${{ github.sha }}"
+          aws s3 cp evidence.tar.gz     s3://${{ env.EVIDENCE_BUCKET }}/${PREFIX}/evidence.tar.gz
+          aws s3 cp evidence.tar.gz.sig s3://${{ env.EVIDENCE_BUCKET }}/${PREFIX}/evidence.tar.gz.sig
+          aws s3 cp evidence.tar.gz.pem s3://${{ env.EVIDENCE_BUCKET }}/${PREFIX}/evidence.tar.gz.pem
+          echo "Evidence bundle: s3://${{ env.EVIDENCE_BUCKET }}/${PREFIX}/"
+
+      - name: PR comment
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `## HIPAA GRC Gate result
+            - plan sha256: \`${{ steps.plan.outputs.sha }}\`
+            - status: ${{ job.status }}
+
+            See workflow run for details.`;
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });

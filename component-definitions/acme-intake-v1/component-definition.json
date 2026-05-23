@@ -1,0 +1,154 @@
+{
+  "component-definition": {
+    "uuid": "1d90fc5a-d34f-4367-a089-7c364e31a947",
+    "metadata": {
+      "title": "Acme Health Patient Intake — Compliant Component",
+      "last-modified": "2026-05-20T00:00:00Z",
+      "version": "1.0.0",
+      "oscal-version": "1.2.1",
+      "parties": [
+        {
+          "uuid": "f02f816c-e8a2-448c-8d35-03332377ba08",
+          "type": "organization",
+          "name": "Acme Health"
+        }
+      ],
+      "roles": [
+        { "id": "provider", "title": "System Owner" }
+      ]
+    },
+    "components": [
+      {
+        "uuid": "eb854d7f-cae2-435d-8329-970cd9194cac",
+        "type": "service",
+        "title": "Acme Patient Intake API + HIPAA baseline",
+        "description": "Telehealth submission API (Lambda + API GW + DynamoDB + S3 uploads), wrapped in a HIPAA Security Rule baseline: KMS CMKs, CloudTrail multi-region, evidence vault with Object Lock, GitHub Actions GRC gate with Conftest + Cosign.",
+        "purpose": "Capture ePHI submissions and demonstrate audit-defensibility against 45 CFR §164.312.",
+        "responsible-roles": [
+          { "role-id": "provider", "party-uuids": ["f02f816c-e8a2-448c-8d35-03332377ba08"] }
+        ],
+        "control-implementations": [
+          {
+            "uuid": "143104da-2845-46b2-bc27-a4c14f5aae57",
+            "source": "https://raw.githubusercontent.com/usnistgov/oscal-content/main/nist.gov/SP800-53/rev5/json/NIST_SP-800-53_rev5_catalog.json",
+            "description": "NIST SP 800-53 rev5 controls implementing HIPAA Security Rule §164.312.",
+            "props": [
+              { "name": "framework", "value": "HIPAA Security Rule" },
+              { "name": "framework-version", "value": "45 CFR Part 164 Subpart C" }
+            ],
+            "implemented-requirements": [
+              {
+                "uuid": "19eea4a1-6d67-4fd5-8ed2-4d9e3306dac5",
+                "control-id": "sc-28",
+                "description": "Encryption at rest. All S3 buckets and DynamoDB tables holding ePHI are encrypted with customer-managed KMS keys, rotation enabled. Implements HIPAA §164.312(a)(2)(iv).",
+                "props": [
+                  { "name": "implementation-status", "value": "implemented" },
+                  { "name": "hipaa-cite", "value": "45 CFR §164.312(a)(2)(iv)" },
+                  { "name": "tf-resource", "value": "module.kms_uploads.aws_kms_key.this" },
+                  { "name": "tf-resource", "value": "module.kms_dynamodb.aws_kms_key.this" },
+                  { "name": "tf-resource", "value": "module.kms_evidence.aws_kms_key.this" }
+                ],
+                "links": [
+                  {
+                    "href": "s3://acme-evidence-vault/{{COMMIT_SHA}}/evidence.tar.gz",
+                    "rel": "evidence",
+                    "media-type": "application/gzip",
+                    "text": "Signed Terraform plan + state demonstrating sse_algorithm=aws:kms on every taggable bucket"
+                  },
+                  {
+                    "href": "policies/hipaa_164_312_a_2_iv_encryption.rego",
+                    "rel": "policy",
+                    "text": "Rego deny rule that blocks merge if SSE != aws:kms"
+                  }
+                ]
+              },
+              {
+                "uuid": "8c2334ca-1d70-4ed5-8b03-064a6530ada1",
+                "control-id": "ac-3",
+                "description": "Access enforcement. All S3 buckets enforce 4-flag public-access-block. Lambda execution role uses scoped DynamoDB actions, no wildcards. Implements HIPAA §164.312(a)(1).",
+                "props": [
+                  { "name": "implementation-status", "value": "implemented" },
+                  { "name": "hipaa-cite", "value": "45 CFR §164.312(a)(1)" },
+                  { "name": "tf-resource", "value": "aws_s3_bucket_public_access_block.uploads_pab_override" },
+                  { "name": "tf-resource", "value": "aws_iam_role_policy.lambda_dynamodb_scoped" }
+                ],
+                "links": [
+                  { "href": "s3://acme-evidence-vault/{{COMMIT_SHA}}/evidence.tar.gz", "rel": "evidence" },
+                  { "href": "policies/hipaa_164_312_a_1_access.rego", "rel": "policy" }
+                ]
+              },
+              {
+                "uuid": "1ae0d174-2aea-486c-9587-145ff99152b6",
+                "control-id": "au-2",
+                "description": "Audit events. CloudTrail multi-region trail with log-file-validation captures all management events. Delivered to a dedicated trail bucket (KMS-encrypted, versioned, access-logged) and CloudWatch Logs (KMS-encrypted, 1yr retention). Implements HIPAA §164.312(b).",
+                "props": [
+                  { "name": "implementation-status", "value": "implemented" },
+                  { "name": "hipaa-cite", "value": "45 CFR §164.312(b)" },
+                  { "name": "tf-resource", "value": "aws_cloudtrail.mgmt" },
+                  { "name": "tf-resource", "value": "aws_cloudwatch_log_group.trail" }
+                ],
+                "links": [
+                  { "href": "s3://acme-evidence-vault/{{COMMIT_SHA}}/evidence.tar.gz", "rel": "evidence" },
+                  { "href": "policies/hipaa_164_312_b_audit.rego", "rel": "policy" }
+                ]
+              },
+              {
+                "uuid": "d98f2bb7-15ac-438b-bf32-e00fb2da6de6",
+                "control-id": "si-7",
+                "description": "Software, firmware, and information integrity. The evidence pipeline produces a Cosign-signed tarball (keyless via GitHub OIDC → Sigstore) and stores it in an S3 vault with Object Lock retention. Auditor verifies bundle.sig against the Sigstore transparency log. Implements HIPAA §164.312(c)(1).",
+                "props": [
+                  { "name": "implementation-status", "value": "implemented" },
+                  { "name": "hipaa-cite", "value": "45 CFR §164.312(c)(1)" },
+                  { "name": "tf-resource", "value": "module.evidence_vault.aws_s3_bucket.vault" },
+                  { "name": "tf-resource", "value": "module.evidence_vault.aws_s3_bucket_object_lock_configuration.vault" },
+                  { "name": "pipeline-step", "value": ".github/workflows/grc-gate.yml::4. SIGN" }
+                ],
+                "links": [
+                  { "href": "s3://acme-evidence-vault/{{COMMIT_SHA}}/evidence.tar.gz.sig", "rel": "evidence", "text": "Cosign signature" },
+                  { "href": "s3://acme-evidence-vault/{{COMMIT_SHA}}/evidence.tar.gz.pem", "rel": "evidence", "text": "Signing certificate" }
+                ]
+              },
+              {
+                "uuid": "f1742bfe-2e57-4f86-99f7-1bc6b3e2c2ce",
+                "control-id": "sc-8",
+                "description": "Transmission confidentiality. All S3 buckets attach a Deny-on-insecure-transport bucket policy (aws:SecureTransport == false). API Gateway domains enforce TLS_1_2 minimum. Implements HIPAA §164.312(e)(1).",
+                "props": [
+                  { "name": "implementation-status", "value": "implemented" },
+                  { "name": "hipaa-cite", "value": "45 CFR §164.312(e)(1)" },
+                  { "name": "tf-resource", "value": "aws_s3_bucket_policy.uploads_tls_override" }
+                ],
+                "links": [
+                  { "href": "policies/hipaa_164_312_e_1_transit.rego", "rel": "policy" }
+                ]
+              },
+              {
+                "uuid": "a7b58c2d-9b54-4ad1-aa66-7f4d62f8c930",
+                "control-id": "ac-6",
+                "description": "Least privilege. Capstone Lambda execution role grants only PutItem/GetItem/Query/UpdateItem on the Submissions table — no dynamodb:* wildcard. Rego rule blocks merge if any IAM policy in the plan re-introduces a wildcard. Implements HIPAA §164.308(a)(1)(ii)(D).",
+                "props": [
+                  { "name": "implementation-status", "value": "implemented" },
+                  { "name": "hipaa-cite", "value": "45 CFR §164.308(a)(1)(ii)(D)" },
+                  { "name": "tf-resource", "value": "aws_iam_role_policy.lambda_dynamodb_scoped" }
+                ],
+                "links": [
+                  { "href": "policies/hipaa_164_308_a_1_ii_d_review.rego", "rel": "policy" }
+                ]
+              },
+              {
+                "uuid": "0c1e2c3a-b9ce-4d92-89f3-d5f4e2a8b6a1",
+                "control-id": "au-11",
+                "description": "Audit record retention. Evidence vault Object Lock retention = 2190 days (6 years) in prod; CloudTrail S3 bucket versioned with 1-year CW Logs retention. Implements HIPAA §164.316(b)(2)(i).",
+                "props": [
+                  { "name": "implementation-status", "value": "implemented" },
+                  { "name": "hipaa-cite", "value": "45 CFR §164.316(b)(2)(i)" },
+                  { "name": "tf-resource", "value": "module.evidence_vault.aws_s3_bucket_object_lock_configuration.vault" },
+                  { "name": "retention-days", "value": "2190" }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
