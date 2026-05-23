@@ -58,7 +58,7 @@ resource "aws_iam_role_policy" "ci" {
         Action = [
           "s3:*", "kms:*", "iam:*", "cloudtrail:*",
           "logs:*", "lambda:*", "apigateway:*",
-          "dynamodb:*", "securityhub:*", "config:*"
+          "dynamodb:*", "securityhub:*", "config:*", "ec2:*"
         ]
         Resource = "*"
       },
